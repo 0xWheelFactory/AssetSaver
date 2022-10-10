@@ -10,6 +10,16 @@ const GWEI = utils.parseUnits("1", "gwei");
 export const PRIORITY_GAS_PRICE = GWEI.mul(31);
 export const BLOCKS_IN_FUTURE = 2;
 
+export const verifyCondition = (
+  EXECUTOR_PRIVATE_KEY: string,
+  SPONSOR_PRIVATE_KEY: string,
+  TOKEN_ADDRESS: string,
+  RECIPIENT: string,
+  ALCHEMY_KEY: string,
+) => {
+  if (!(EXECUTOR_PRIVATE_KEY && SPONSOR_PRIVATE_KEY && TOKEN_ADDRESS && RECIPIENT && ALCHEMY_KEY)) process.exit(1);
+};
+
 export async function checkSimulation(
   flashbotsProvider: FlashbotsBundleProvider,
   signedBundle: Array<string>,

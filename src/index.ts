@@ -5,12 +5,18 @@ import {
   FlashbotsBundleTransaction,
 } from "@flashbots/ethers-provider-bundle";
 import { config as envConfig } from "dotenv";
-import { ContractFactory, ethers, providers, Wallet } from "ethers";
+import { ethers, providers, Wallet } from "ethers";
 import path from "path";
-import TestTokenArtifact from "./abi/testToken.json";
 import { Base } from "./operations/base";
 import { TransferERC20 } from "./operations/transferERC20";
-import { BLOCKS_IN_FUTURE, checkSimulation, gasPriceToGwei, printTransactions, PRIORITY_GAS_PRICE } from "./utils";
+import {
+  BLOCKS_IN_FUTURE,
+  checkSimulation,
+  gasPriceToGwei,
+  printTransactions,
+  PRIORITY_GAS_PRICE,
+  verifyCondition,
+} from "./utils";
 
 envConfig({ path: path.resolve(__dirname, "./.env") });
 
@@ -19,6 +25,7 @@ const SPONSOR_PRIVATE_KEY = process.env.SPONSOR_PRIVATE_KEY || "";
 const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS || "";
 const RECIPIENT = process.env.RECIPIENT || "";
 const ALCHEMY_KEY = process.env.ALCHEMY_KEY || "";
+verifyCondition(EXECUTOR_PRIVATE_KEY, SPONSOR_PRIVATE_KEY, TOKEN_ADDRESS, RECIPIENT, ALCHEMY_KEY);
 
 const alchemyProvider = new providers.AlchemyProvider("goerli", ALCHEMY_KEY);
 const walletExecutor = new Wallet(EXECUTOR_PRIVATE_KEY);
@@ -26,8 +33,6 @@ const walletSponsor = new Wallet(SPONSOR_PRIVATE_KEY);
 const authSigner = Wallet.createRandom();
 
 async function main() {
-  verifyCondition(EXECUTOR_PRIVATE_KEY, SPONSOR_PRIVATE_KEY, TOKEN_ADDRESS, RECIPIENT, ALCHEMY_KEY);
-
   const flashbotsProvider = await FlashbotsBundleProvider.create(
     alchemyProvider,
     authSigner,
@@ -36,12 +41,13 @@ async function main() {
   );
 
   let tokenAddress = process.env.TOKEN_ADDRESS || "";
+  if (!tokenAddress) console.error("No token specified");
   // ================== uncomment for test ==================
-  if (!TOKEN_ADDRESS) {
-    const testTokenFactory = new ContractFactory(TestTokenArtifact.abi, TestTokenArtifact.bytecode, walletSponsor);
-    const testToken = await testTokenFactory.deploy(ethers.utils.parseEther("1"));
-    tokenAddress = testToken.address;
-  }
+  // if (!TOKEN_ADDRESS) {
+  //   const testTokenFactory = new ContractFactory(TestTokenArtifact.abi, TestTokenArtifact.bytecode, walletSponsor);
+  //   const testToken = await testTokenFactory.deploy(ethers.utils.parseEther("1"));
+  //   tokenAddress = testToken.address;
+  // }
   // ================== uncomment for test ==================
   const operation: Base = new TransferERC20(alchemyProvider, walletExecutor.address, RECIPIENT, tokenAddress);
 
@@ -57,12 +63,13 @@ async function main() {
   const gasEstimateTotal = gasEstimates.reduce((acc, cur) => acc.add(cur), ethers.constants.Zero);
   const latestBlock = await alchemyProvider.getBlock("latest");
   const gasPrice = PRIORITY_GAS_PRICE.add(latestBlock.baseFeePerGas || 0);
+  const bonusGasPrice = gasPrice.mul(2);
   const bundleTransactions: Array<FlashbotsBundleTransaction | FlashbotsBundleRawTransaction> = [
     {
       transaction: {
         to: walletExecutor.address,
-        gasPrice: gasPrice,
-        value: gasEstimateTotal.mul(gasPrice),
+        gasPrice: bonusGasPrice,
+        value: gasEstimateTotal.mul(bonusGasPrice),
         gasLimit: 21000,
       },
       signer: walletSponsor,
@@ -71,7 +78,7 @@ async function main() {
       return {
         transaction: {
           ...transaction,
-          gasPrice: gasPrice,
+          gasPrice: bonusGasPrice,
           gasLimit: gasEstimates[txNumber],
         },
         signer: walletExecutor,
@@ -87,7 +94,7 @@ async function main() {
   console.log(`Executor Account: ${walletExecutor.address}`);
   console.log(`Sponsor Account: ${walletSponsor.address}`);
   console.log(`Simulated Gas Price: ${gasPriceToGwei(simulatedGasPrice)} gwei`);
-  console.log(`Gas Price: ${gasPriceToGwei(gasPrice)} gwei`);
+  console.log(`Gas Price: ${gasPriceToGwei(bonusGasPrice)} gwei`);
   console.log(`Gas Used: ${gasEstimateTotal.toString()}`);
 
   alchemyProvider.on("block", async (blockNumber) => {
@@ -111,13 +118,3 @@ async function main() {
 }
 
 main();
-
-const verifyCondition = (
-  EXECUTOR_PRIVATE_KEY: string,
-  SPONSOR_PRIVATE_KEY: string,
-  TOKEN_ADDRESS: string,
-  RECIPIENT: string,
-  ALCHEMY_KEY: string,
-) => {
-  if (!(EXECUTOR_PRIVATE_KEY && SPONSOR_PRIVATE_KEY && TOKEN_ADDRESS && RECIPIENT && ALCHEMY_KEY)) process.exit(1);
-};
