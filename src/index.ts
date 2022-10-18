@@ -9,14 +9,7 @@ import { ethers, providers, Wallet } from "ethers";
 import path from "path";
 import { Base } from "./operations/base";
 import { TransferERC20 } from "./operations/transferERC20";
-import {
-  BLOCKS_IN_FUTURE,
-  checkSimulation,
-  gasPriceToGwei,
-  printTransactions,
-  PRIORITY_GAS_PRICE,
-  verifyCondition,
-} from "./utils";
+import { BLOCKS_IN_FUTURE, checkSimulation, gasPriceToGwei, printTransactions, verifyCondition } from "./utils";
 
 envConfig({ path: path.resolve(__dirname, "./.env") });
 
@@ -62,15 +55,21 @@ async function main() {
   );
   const gasEstimateTotal = gasEstimates.reduce((acc, cur) => acc.add(cur), ethers.constants.Zero);
   const latestBlock = await alchemyProvider.getBlock("latest");
-  const gasPrice = PRIORITY_GAS_PRICE.add(latestBlock.baseFeePerGas || 0);
-  const bonusGasPrice = gasPrice.mul(2);
+  const currentBaseFee = latestBlock.baseFeePerGas;
+  if (!currentBaseFee) throw Error("Cannot get current base fee");
+  const maxBaseFeeInFutureBlock = FlashbotsBundleProvider.getMaxBaseFeeInFutureBlock(currentBaseFee, 2);
+  const priorityFee = ethers.utils.parseUnits("20", "gwei");
+  const feePerGas = priorityFee.add(maxBaseFeeInFutureBlock);
   const bundleTransactions: Array<FlashbotsBundleTransaction | FlashbotsBundleRawTransaction> = [
     {
       transaction: {
         to: walletExecutor.address,
-        gasPrice: bonusGasPrice,
-        value: gasEstimateTotal.mul(bonusGasPrice),
+        type: 2,
+        maxFeePerGas: feePerGas,
+        maxPriorityFeePerGas: priorityFee,
+        value: gasEstimateTotal.mul(feePerGas),
         gasLimit: 21000,
+        chainId: 5,
       },
       signer: walletSponsor,
     },
@@ -78,8 +77,11 @@ async function main() {
       return {
         transaction: {
           ...transaction,
-          gasPrice: bonusGasPrice,
+          type: 2,
+          maxFeePerGas: feePerGas,
+          maxPriorityFeePerGas: priorityFee,
           gasLimit: gasEstimates[txNumber],
+          chainId: 5,
         },
         signer: walletExecutor,
       };
@@ -94,7 +96,7 @@ async function main() {
   console.log(`Executor Account: ${walletExecutor.address}`);
   console.log(`Sponsor Account: ${walletSponsor.address}`);
   console.log(`Simulated Gas Price: ${gasPriceToGwei(simulatedGasPrice)} gwei`);
-  console.log(`Gas Price: ${gasPriceToGwei(bonusGasPrice)} gwei`);
+  console.log(`Gas Price: ${gasPriceToGwei(feePerGas)} gwei`);
   console.log(`Gas Used: ${gasEstimateTotal.toString()}`);
 
   alchemyProvider.on("block", async (blockNumber) => {
