@@ -1,0 +1,10 @@
+{
+  "mainnet": {
+    "chainId": 1,
+    "flashbots": "https://relay.flashbots.net"
+  },
+  "goerli": {
+    "chainId": 5,
+    "flashbots": "https://relay-goerli.flashbots.net"
+  }
+}

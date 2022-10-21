@@ -5,20 +5,32 @@ import {
 } from "@flashbots/ethers-provider-bundle";
 import { BigNumber, utils } from "ethers";
 import { parseTransaction } from "ethers/lib/utils";
+import NetworkInfo from "./networks.json";
+
+export interface Env {
+  executorPK: string;
+  sponsorPK: string;
+  contractAddress: string;
+  alchemy: string;
+  recipient: string;
+  gasPlatformAPI: string;
+  network: Network;
+}
+
+enum SupportedNetworks {
+  goerli,
+  mainnet,
+}
+
+interface Network {
+  chainName: string;
+  chainId: number;
+  flashbotsConnectionUrl: string;
+}
 
 const GWEI = utils.parseUnits("1", "gwei");
 export const PRIORITY_GAS_PRICE = GWEI.mul(31);
 export const BLOCKS_IN_FUTURE = 2;
-
-export const verifyCondition = (
-  EXECUTOR_PRIVATE_KEY: string,
-  SPONSOR_PRIVATE_KEY: string,
-  TOKEN_ADDRESS: string,
-  RECIPIENT: string,
-  ALCHEMY_KEY: string,
-) => {
-  if (!(EXECUTOR_PRIVATE_KEY && SPONSOR_PRIVATE_KEY && TOKEN_ADDRESS && RECIPIENT && ALCHEMY_KEY)) process.exit(1);
-};
 
 export async function checkSimulation(
   flashbotsProvider: FlashbotsBundleProvider,
@@ -76,4 +88,33 @@ export async function printTransactions(
 
 export const gasPriceToGwei = (gasPrice: BigNumber): number => {
   return gasPrice.mul(100).div(GWEI).toNumber() / 100;
+};
+
+export const loadEnv = (): Env => {
+  const executorPK = process.env.EXECUTOR_PRIVATE_KEY || "";
+  const sponsorPK = process.env.SPONSOR_PRIVATE_KEY || "";
+  const contractAddress = process.env.CONTRACT_ADDRESS || "";
+  const recipient = process.env.RECIPIENT || "";
+  const alchemy = process.env.ALCHEMY_KEY || "";
+  const gasPlatformAPI = process.env.GAS_API || "";
+  const chainName = process.env.NETWORK || "goerli";
+  if ([executorPK, sponsorPK, contractAddress, recipient, alchemy, gasPlatformAPI].includes(""))
+    throw new Error("Missing env variable");
+  if (!(chainName in SupportedNetworks)) throw new Error("Unsupported network");
+  const flashbotsConnectionUrl = NetworkInfo[chainName].flashbots!;
+  const chainId = NetworkInfo[chainName].chainId!;
+  const network: Network = {
+    chainName,
+    chainId,
+    flashbotsConnectionUrl,
+  };
+  return {
+    executorPK,
+    sponsorPK,
+    contractAddress,
+    recipient,
+    alchemy,
+    gasPlatformAPI,
+    network,
+  };
 };
