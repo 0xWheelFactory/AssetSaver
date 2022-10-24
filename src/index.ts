@@ -5,51 +5,35 @@ import {
   FlashbotsBundleTransaction,
 } from "@flashbots/ethers-provider-bundle";
 import { config as envConfig } from "dotenv";
-import { ethers, providers, Wallet } from "ethers";
+import { ethers, providers, utils, Wallet } from "ethers";
 import path from "path";
 import { Base } from "./operations/base";
 import { TransferERC20 } from "./operations/transferERC20";
-import {
-  BLOCKS_IN_FUTURE,
-  checkSimulation,
-  gasPriceToGwei,
-  printTransactions,
-  PRIORITY_GAS_PRICE,
-  verifyCondition,
-} from "./utils";
+import { BLOCKS_IN_FUTURE, checkSimulation, gasPriceToGwei, loadEnv, printTransactions } from "./utils";
 
 envConfig({ path: path.resolve(__dirname, "./.env") });
 
-const EXECUTOR_PRIVATE_KEY = process.env.EXECUTOR_PRIVATE_KEY || "";
-const SPONSOR_PRIVATE_KEY = process.env.SPONSOR_PRIVATE_KEY || "";
-const TOKEN_ADDRESS = process.env.TOKEN_ADDRESS || "";
-const RECIPIENT = process.env.RECIPIENT || "";
-const ALCHEMY_KEY = process.env.ALCHEMY_KEY || "";
-verifyCondition(EXECUTOR_PRIVATE_KEY, SPONSOR_PRIVATE_KEY, TOKEN_ADDRESS, RECIPIENT, ALCHEMY_KEY);
+const envVariables = loadEnv();
 
-const alchemyProvider = new providers.AlchemyProvider("goerli", ALCHEMY_KEY);
-const walletExecutor = new Wallet(EXECUTOR_PRIVATE_KEY);
-const walletSponsor = new Wallet(SPONSOR_PRIVATE_KEY);
+const alchemyProvider = new providers.AlchemyProvider(envVariables.network.chainName, envVariables.alchemy);
+const walletExecutor = new Wallet(envVariables.executorPK);
+const walletSponsor = new Wallet(envVariables.sponsorPK);
 const authSigner = Wallet.createRandom();
 
 async function main() {
   const flashbotsProvider = await FlashbotsBundleProvider.create(
     alchemyProvider,
     authSigner,
-    "https://relay-goerli.flashbots.net",
-    "goerli",
+    envVariables.network.flashbotsConnectionUrl,
+    envVariables.network.chainName,
   );
 
-  let tokenAddress = process.env.TOKEN_ADDRESS || "";
-  if (!tokenAddress) console.error("No token specified");
-  // ================== uncomment for test ==================
-  // if (!TOKEN_ADDRESS) {
-  //   const testTokenFactory = new ContractFactory(TestTokenArtifact.abi, TestTokenArtifact.bytecode, walletSponsor);
-  //   const testToken = await testTokenFactory.deploy(ethers.utils.parseEther("1"));
-  //   tokenAddress = testToken.address;
-  // }
-  // ================== uncomment for test ==================
-  const operation: Base = new TransferERC20(alchemyProvider, walletExecutor.address, RECIPIENT, tokenAddress);
+  const operation: Base = new TransferERC20(
+    alchemyProvider,
+    walletExecutor.address,
+    envVariables.recipient,
+    envVariables.contractAddress,
+  );
 
   const sponsoredTxs = await operation.getSponsoredTransactions();
   const gasEstimates = await Promise.all(
@@ -62,15 +46,22 @@ async function main() {
   );
   const gasEstimateTotal = gasEstimates.reduce((acc, cur) => acc.add(cur), ethers.constants.Zero);
   const latestBlock = await alchemyProvider.getBlock("latest");
-  const gasPrice = PRIORITY_GAS_PRICE.add(latestBlock.baseFeePerGas || 0);
-  const bonusGasPrice = gasPrice.mul(2);
+  const currentBaseFee = latestBlock.baseFeePerGas;
+  if (!currentBaseFee) throw Error("Cannot get current base fee");
+  const maxBaseFeeInFutureBlock = FlashbotsBundleProvider.getMaxBaseFeeInFutureBlock(currentBaseFee, 2);
+  let priorityFee =
+    (await alchemyProvider.getFeeData()).maxPriorityFeePerGas?.mul(10) || utils.parseUnits("50", "gwei");
+  const feePerGas = priorityFee.add(maxBaseFeeInFutureBlock);
   const bundleTransactions: Array<FlashbotsBundleTransaction | FlashbotsBundleRawTransaction> = [
     {
       transaction: {
         to: walletExecutor.address,
-        gasPrice: bonusGasPrice,
-        value: gasEstimateTotal.mul(bonusGasPrice),
+        type: 2,
+        maxFeePerGas: feePerGas,
+        maxPriorityFeePerGas: priorityFee,
+        value: gasEstimateTotal.mul(feePerGas),
         gasLimit: 21000,
+        chainId: envVariables.network.chainId,
       },
       signer: walletSponsor,
     },
@@ -78,8 +69,11 @@ async function main() {
       return {
         transaction: {
           ...transaction,
-          gasPrice: bonusGasPrice,
+          type: 2,
+          maxFeePerGas: feePerGas,
+          maxPriorityFeePerGas: priorityFee,
           gasLimit: gasEstimates[txNumber],
+          chainId: envVariables.network.chainId,
         },
         signer: walletExecutor,
       };
@@ -94,7 +88,7 @@ async function main() {
   console.log(`Executor Account: ${walletExecutor.address}`);
   console.log(`Sponsor Account: ${walletSponsor.address}`);
   console.log(`Simulated Gas Price: ${gasPriceToGwei(simulatedGasPrice)} gwei`);
-  console.log(`Gas Price: ${gasPriceToGwei(bonusGasPrice)} gwei`);
+  console.log(`Max Fee Per Gas: ${gasPriceToGwei(feePerGas)} gwei`);
   console.log(`Gas Used: ${gasEstimateTotal.toString()}`);
 
   alchemyProvider.on("block", async (blockNumber) => {
